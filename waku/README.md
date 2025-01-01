@@ -2,8 +2,8 @@
 ## It detects missed wake-up alarms and wakes you up with gradually increasing light effects and sounds. 
 
 ## Features
-Version 0.1 - can be only programmed via API to wake-up at a specific time.
-Version 0.2 [in-progress] - it is going to use a microphone to detect missed alarms automatically.
+* Version 0.1 - can be only programmed via API to wake-up at a specific time.
+* Version 0.2 [in-progress] - it is going to use a microphone to detect missed alarms automatically.
 
 ## Prerequisites
 
@@ -35,6 +35,7 @@ I've used a 15x15x5 cm wooden box as a base for the robot. The pins are connecte
    - `ArduinoGraphics`
    - `WiFiS3`
    - `Arduino_LED_Matrix`
+   - `NTPClient`
 
 ### Installing ArduinoOTA with Extended Timeout
 To enable easy updates, this project is equipped with an OTA system. Unfortunatelly, the OTA library is known to be problematic and doesn't work out of the box on any of my computers. 
