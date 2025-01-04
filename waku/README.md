@@ -36,6 +36,8 @@ I've used a 15x15x5 cm wooden box as a base for the robot. The pins are connecte
    - `WiFiS3`
    - `Arduino_LED_Matrix`
    - `NTPClient`
+   - `ArduinoOTA`
+   - `ArduinoJSON`
 
 ### Installing ArduinoOTA with Extended Timeout
 To enable easy updates, this project is equipped with an OTA system. Unfortunatelly, the OTA library is known to be problematic and doesn't work out of the box on any of my computers. 

@@ -22,7 +22,7 @@ void DisplayManager::displayError(int errorCode) {
     if (errorCode == 0) {
         matrix.println("OK");
     } else {
-        snprintf(errorText, sizeof(errorText), "E %d", errorCode);
+        snprintf(errorText, sizeof(errorText), "E%d", errorCode);
         matrix.println(errorText);
     }
     
