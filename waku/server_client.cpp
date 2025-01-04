@@ -1,55 +1,68 @@
 #include "server_client.h"
 
-bool ServerClient::validateDeviceAndGetAlarmTime(const char* errorCode, int& hour, int& minute) {
-    String params = "error=";
-    params += errorCode ? errorCode : "";
-    
-    Serial.print("Connecting to server at ");
-    Serial.print(serverHost);
-    Serial.print(":");
-    Serial.println(serverPort);
-    
-    String response = makeHttpRequest("/api/device/validate", params.c_str());
-    if (response.length() == 0) {
-        displayManager.displayMessage("SERVER ERR");
-        return false;
-    }
-    
-    Serial.print("Server response: ");
-    Serial.println(response);
-    
-    // Parse JSON response
+void ServerClient::logError(ErrorCode error, const char* message) {
+    Serial.print("Error: ");
+    Serial.print(getErrorString(error));
+    Serial.print(" - ");
+    Serial.println(message);
+    displayManager.displayError(static_cast<int>(error));
+}
+
+bool ServerClient::sendDeviceUpdateAndGetTime(const DeviceUpdate& update, int& hour, int& minute, unsigned long& currentTime) {
+    // Create JSON document
     StaticJsonDocument<200> doc;
-    DeserializationError error = deserializeJson(doc, response);
+    doc["error_code"] = getErrorString(update.error);
+    doc["co2_level"] = update.CO2Level;
+    doc["sound_level"] = update.SoundLevel;
+    doc["alarm_active"] = update.AlarmActive;
+    doc["alarm_active_time"] = update.AlarmActiveTime;
     
-    if (error) {
-        Serial.print("JSON parsing failed: ");
-        Serial.println(error.c_str());
-        displayManager.displayMessage("JSON ERR");
+    String jsonString;
+    serializeJson(doc, jsonString);
+    
+    String response = makeHttpRequest("/api/device/update", jsonString);
+    if (response.length() == 0) {
+        logError(ErrorCode::SERVER_CONNECTION_FAILED, "Failed to send device update");
         return false;
     }
     
-    const char* timeStr = doc["time"];
-    if (!timeStr) {
-        Serial.println("No time field in response");
-        displayManager.displayMessage("NO TIME");
+    ServerResponse serverResponse;
+    if (!parseServerResponse(response, serverResponse)) {
         return false;
     }
     
-    if (parseTimeString(timeStr, hour, minute)) {
+    currentTime = serverResponse.currentTime + 3600; // Add one hour (3600 seconds) to UTC time
+    
+    if (parseTimeString(serverResponse.alarmTime.c_str(), hour, minute)) {
         char message[20];
         snprintf(message, sizeof(message), "ALARM %02d:%02d", hour, minute);
         displayManager.displayMessage(message);
         return true;
     }
     
-    displayManager.displayMessage("TIME ERR");
+    logError(ErrorCode::INVALID_TIME_FORMAT, "Invalid time format");
     return false;
+}
+
+bool ServerClient::parseServerResponse(const String& response, ServerResponse& serverResponse) {
+    StaticJsonDocument<200> doc;
+    DeserializationError error = deserializeJson(doc, response);
+    if (error) {
+        logError(ErrorCode::JSON_PARSE_ERROR, error.c_str());
+        return false;
+    }
+    
+    serverResponse.alarmTime = doc["time"].as<const char*>();
+    serverResponse.alarmArmed = doc["armed"] | true;
+    serverResponse.currentTime = doc["current_time"] | 0;
+    
+    return true;
 }
 
 bool ServerClient::parseTimeString(const char* timeStr, int& hour, int& minute) {
     // Expected format: "HH:MM"
     if (strlen(timeStr) != 5 || timeStr[2] != ':') {
+        logError(ErrorCode::INVALID_TIME_FORMAT, "Time string must be in HH:MM format");
         return false;
     }
     
@@ -59,38 +72,44 @@ bool ServerClient::parseTimeString(const char* timeStr, int& hour, int& minute) 
     hour = atoi(hourStr);
     minute = atoi(minStr);
     
-    return hour >= 0 && hour < 24 && minute >= 0 && minute < 60;
+    if (hour < 0 || hour >= 24 || minute < 0 || minute >= 60) {
+        logError(ErrorCode::INVALID_TIME_FORMAT, "Time values out of range");
+        return false;
+    }
+    
+    return true;
 }
 
-String ServerClient::makeHttpRequest(const char* endpoint, const char* params) {
+String ServerClient::makeHttpRequest(const char* endpoint, const String& jsonBody) {
     if (!client.connect(serverHost, serverPort)) {
-        Serial.println("Connection failed");
+        logError(ErrorCode::SERVER_CONNECTION_FAILED, "Failed to connect to server");
         return "";
     }
     
-    String url = String(endpoint);
-    if (params && strlen(params) > 0) {
-        url += "?";
-        url += params;
-    }
-    
     Serial.print("Making request to: ");
-    Serial.println(url);
+    Serial.println(endpoint);
     
     // Make HTTP request
-    client.print("GET ");
-    client.print(url);
+    client.print("POST ");
+    client.print(endpoint);
     client.println(" HTTP/1.1");
     client.print("Host: ");
     client.println(serverHost);
+    client.println("Content-Type: application/json");
+    client.print("Content-Length: ");
+    client.println(jsonBody.length());
     client.println("Connection: close");
     client.println();
+    client.println(jsonBody);
+    
+    Serial.print("Request body: ");
+    Serial.println(jsonBody);
     
     // Wait for response
     unsigned long timeout = millis();
     while (!client.available()) {
         if (millis() - timeout > 5000) {
-            Serial.println("Request timeout");
+            logError(ErrorCode::SERVER_CONNECTION_FAILED, "Request timeout");
             client.stop();
             return "";
         }
@@ -100,21 +119,22 @@ String ServerClient::makeHttpRequest(const char* endpoint, const char* params) {
     bool headersParsed = false;
     while (client.available() && !headersParsed) {
         String line = client.readStringUntil('\n');
-        Serial.print("Header: ");
-        Serial.println(line);
         if (line == "\r") {
             headersParsed = true;
         }
     }
     
     if (!headersParsed) {
-        Serial.println("Failed to parse headers");
+        logError(ErrorCode::SERVER_CONNECTION_FAILED, "Failed to parse headers");
         return "";
     }
     
     // Read response body
     String response = client.readString();
     client.stop();
+    
+    Serial.print("Response: ");
+    Serial.println(response);
     
     return response;
 } 

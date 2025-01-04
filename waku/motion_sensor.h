@@ -10,7 +10,7 @@ private:
     unsigned long lastDebugTime;
 
 public:
-    MotionSensor(int pin, unsigned long debugInterval = 2000);
+    MotionSensor(int pin, unsigned long debugInterval = 10000);
     bool checkMotion();
     void printDebug(bool isWakeUpTime, bool alarmTriggered);
 };
