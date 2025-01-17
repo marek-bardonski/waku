@@ -15,7 +15,8 @@ enum class ErrorCode {
     SERVER_CONNECTION_FAILED = 10,
     JSON_PARSE_ERROR = 11,
     INVALID_TIME_FORMAT = 12,
-    SENSOR_READ_ERROR = 13
+    SENSOR_READ_ERROR = 13,
+    TASK_INIT_FAILED = 14
 };
 
 // Convert enum to string for display and logging
@@ -35,6 +36,7 @@ inline const char* getErrorString(ErrorCode code) {
         case ErrorCode::JSON_PARSE_ERROR: return "JSON_PARSE_ERROR";
         case ErrorCode::INVALID_TIME_FORMAT: return "INVALID_TIME_FORMAT";
         case ErrorCode::SENSOR_READ_ERROR: return "SENSOR_READ_ERROR";
+        case ErrorCode::TASK_INIT_FAILED: return "TASK_INIT_FAILED";
         default: return "UNKNOWN_ERROR";
     }
 }

@@ -2,8 +2,9 @@
 #include <WiFiS3.h>
 #include <ArduinoOTA.h>
 #include <ArduinoGraphics.h>
-#include "Arduino_LED_Matrix.h"
+#include <Arduino_LED_Matrix.h>
 #include <RTC.h>
+#include <Arduino_FreeRTOS.h>
 #include "alarm.h"
 #include "motion_sensor.h"
 #include "server_client.h"
@@ -12,25 +13,23 @@
 #include "co2_sensor.h"
 #include "sound_sensor.h"
 #include "error_codes.h"
+#include "task_manager.h"
 
 // Recovery settings
 const unsigned long WATCHDOG_TIMEOUT = 8000;  // 8 seconds
 const int MAX_RECOVERY_ATTEMPTS = 3;
 const unsigned long RECOVERY_DELAY = 10000;   // 10 seconds between recovery attempts
-unsigned long lastRecoveryAttempt = 0;
 bool systemInitialized = false;
-unsigned long lastWatchdogReset = 0;
-const unsigned long WATCHDOG_RESET_INTERVAL = 4000;  // Reset every 4 seconds
 
 // Server settings
-const char* server_host = SERVER_HOST;  // Local hostname of the server
+const char* server_host = SERVER_HOST;
 const int server_port = SERVER_PORT;
 
 // Pin definitions
 const int BUZZER_PIN = 12;
 const int PIR_PIN = A2;
 const int LED_PINS[] = {9, 10, 11};
-const int CO2_PWM_PIN = 5;  // Using pin 5 for CO2 sensor PWM input
+const int CO2_PWM_PIN = 2;
 const int MAX9814_PIN = A0;
 
 const int LED_PIN_COUNT = sizeof(LED_PINS) / sizeof(LED_PINS[0]);
@@ -39,8 +38,8 @@ const int LED_PIN_COUNT = sizeof(LED_PINS) / sizeof(LED_PINS[0]);
 const int BEEP_FREQUENCIES[] = {8000, 3500, 3000, 2500, 2000, 1500};
 const int BEEP_DURATIONS[] = {20, 100, 200, 300, 500, 1000};
 const int FREQ_STEPS = sizeof(BEEP_FREQUENCIES) / sizeof(BEEP_FREQUENCIES[0]);
-const int INITIAL_INTERVAL = 10000;
-const int FINAL_INTERVAL = 2000;
+const int INITIAL_INTERVAL = 5000;
+const int FINAL_INTERVAL = 200;
 
 // WiFi settings
 char ssid[] = SECRET_SSID;
@@ -58,18 +57,8 @@ Alarm* alarm = nullptr;
 MotionSensor* motionSensor = nullptr;
 DisplayManager* displayManager = nullptr;
 ServerClient* serverClient = nullptr;
-
-// Time update check
-unsigned long lastServerCheck = 0;
-const unsigned long SERVER_CHECK_INTERVAL = 5 * 60 * 1000;  // Check every 5 minutes
-
-// Sensor objects
 CO2Sensor* co2Sensor = nullptr;
 SoundSensor* soundSensor = nullptr;
-
-// Sensor data reporting
-unsigned long lastSensorReport = 0;
-const unsigned long SENSOR_REPORT_INTERVAL = 5 * 60 * 1000; // 5 minutes
 
 // Time conversion helper
 RTCTime unixTimeToRTCTime(unsigned long unixTime) {
@@ -95,51 +84,6 @@ RTCTime unixTimeToRTCTime(unsigned long unixTime) {
     );
 }
 
-void printRTCTime(const RTCTime& time) {
-    Serial.print(time.getYear());
-    Serial.print("-");
-    Serial.print(static_cast<int>(time.getMonth()));
-    Serial.print("-");
-    Serial.print(time.getDayOfMonth());
-    Serial.print(" ");
-    Serial.print(time.getHour());
-    Serial.print(":");
-    Serial.print(time.getMinutes());
-    Serial.print(":");
-    Serial.println(time.getSeconds());
-}
-
-bool updateRTCFromUnixTime(unsigned long unixTime) {
-    RTCTime timeToSet = unixTimeToRTCTime(unixTime);
-    
-    Serial.print("Setting RTC from Unix timestamp: ");
-    Serial.println(unixTime);
-    Serial.print("Calculated time: ");
-    printRTCTime(timeToSet);
-    
-    if (!RTC.setTime(timeToSet)) {
-        Serial.println("Failed to set RTC time");
-        return false;
-    }
-    
-    Serial.println("RTC time set successfully");
-    return true;
-}
-
-void printWiFiStatus() {
-    Serial.print("SSID: ");
-    Serial.println(WiFi.SSID());
-
-    IPAddress ip = WiFi.localIP();
-    Serial.print("IP Address: ");
-    Serial.println(ip);
-
-    long rssi = WiFi.RSSI();
-    Serial.print("Signal strength (RSSI):");
-    Serial.print(rssi);
-    Serial.println(" dBm");
-}
-
 bool connectToWiFi() {
     int attempts = 0;
     const int maxAttempts = 5;
@@ -155,37 +99,37 @@ bool connectToWiFi() {
         status = WiFi.begin(ssid, pass);
         if (status != WL_CONNECTED) {
             attempts++;
-            displayManager->displayError(static_cast<int>(ErrorCode::WIFI_CONNECTION_FAILED));
+            if (displayManager) {
+                displayManager->displayError(static_cast<int>(ErrorCode::WIFI_CONNECTION_FAILED));
+            }
             
             if (attempts < maxAttempts) {
-                for (int i = 0; i < 5; i++) {
-                    delay(1000);
-                }
+                vTaskDelay(pdMS_TO_TICKS(5000));  // Use vTaskDelay instead of Thread::sleep
             }
         }
     }
     
     if (status == WL_CONNECTED) {
         Serial.println("Connected to WiFi");
-        printWiFiStatus();
-        displayManager->displayMessage("WIFI OK");
+        if (displayManager) {
+            displayManager->displayMessage("W+");
+        }
         ArduinoOTA.begin(WiFi.localIP(), "Arduino", "password", InternalStorage);
         return true;
     } else {
         Serial.println("Failed to connect to WiFi");
-        displayManager->displayError(static_cast<int>(ErrorCode::WIFI_CONNECTION_FAILED));
+        if (displayManager) {
+            displayManager->displayError(static_cast<int>(ErrorCode::WIFI_CONNECTION_FAILED));
+        }
         return false;
     }
 }
 
 bool initializeSystem() {
-    bool fullInit = true;  // Track if we achieved full initialization
-    
-    // Initialize display first for status messages
-    Serial.println("\n=== System Initialization ===");
-    
+    bool fullInit = true;
+
     // Try to connect to WiFi
-    Serial.println("1. Connecting to WiFi...");
+    Serial.println("Connecting to WiFi...");
     if (!connectToWiFi()) {
         Serial.println("WARNING: Operating without WiFi connection");
         fullInit = false;
@@ -193,16 +137,11 @@ bool initializeSystem() {
     
     // Initialize server client if WiFi is available
     if (WiFi.status() == WL_CONNECTED) {
-        Serial.println("2. Initializing server client...");
-        Serial.print("   Server host: ");
-        Serial.println(server_host);
-        Serial.print("   Server port: ");
-        Serial.println(server_port);
-        
+        Serial.println("Initializing server client...");
         serverClient = new ServerClient(server_host, server_port, *displayManager, co2Sensor, soundSensor, alarm);
         
         // Try to setup time and get initial alarm settings
-        Serial.println("3. Setting up RTC and getting initial time...");
+        Serial.println("Setting up RTC and getting initial time...");
         if (!RTC.begin()) {
             Serial.println("ERROR: RTC initialization failed");
             displayManager->displayError(static_cast<int>(ErrorCode::RTC_INIT_FAILED));
@@ -215,24 +154,14 @@ bool initializeSystem() {
             int initialMinute = WAKE_MINUTE;
             unsigned long currentTime;
             
-            Serial.println("4. Getting time and alarm settings from server...");
-            Serial.println("   Making request to server...");
-            
+            Serial.println("Getting time and alarm settings from server...");
             DeviceUpdate initialUpdate;
             if (serverClient->sendDeviceUpdateAndGetTime(initialUpdate, initialHour, initialMinute, currentTime)) {
-                Serial.println("   Server response received successfully");
-                Serial.print("   Current time from server: ");
-                Serial.println(currentTime);
-                
-                if (updateRTCFromUnixTime(currentTime)) {
-                    Serial.println("   RTC updated successfully");
-                    
-                    Serial.print("   Alarm time set to: ");
-                    Serial.print(initialHour);
-                    Serial.print(":");
-                    Serial.println(initialMinute);
+                RTCTime timeToSet = unixTimeToRTCTime(currentTime);
+                if (RTC.setTime(timeToSet)) {
+                    Serial.println("RTC updated successfully");
                 } else {
-                    Serial.println("ERROR: Failed to update RTC with server time");
+                    Serial.println("ERROR: Failed to update RTC time");
                     fullInit = false;
                 }
             } else {
@@ -242,7 +171,7 @@ bool initializeSystem() {
             }
             
             // Create alarm with either server time or defaults
-            Serial.println("5. Creating alarm...");
+            Serial.println("Creating alarm...");
             alarm = new Alarm(initialHour, initialMinute, WAKE_DURATION,
                             LED_PINS, LED_PIN_COUNT,
                             BUZZER_PIN,
@@ -254,16 +183,12 @@ bool initializeSystem() {
         fullInit = false;
         
         // Try to initialize RTC anyway
-        Serial.println("3. Setting up RTC (offline mode)...");
         if (!RTC.begin()) {
             Serial.println("ERROR: RTC initialization failed");
             displayManager->displayError(static_cast<int>(ErrorCode::RTC_INIT_FAILED));
-        } else {
-            Serial.println("RTC initialized successfully (but no time sync available)");
         }
         
         // Create alarm with default values
-        Serial.println("4. Creating alarm with default values...");
         alarm = new Alarm(WAKE_HOUR, WAKE_MINUTE, WAKE_DURATION,
                          LED_PINS, LED_PIN_COUNT,
                          BUZZER_PIN,
@@ -271,13 +196,8 @@ bool initializeSystem() {
                          INITIAL_INTERVAL, FINAL_INTERVAL);
     }
     
-    Serial.println("6. Creating motion sensor...");
+    Serial.println("Creating motion sensor...");
     motionSensor = new MotionSensor(PIR_PIN);
-    
-    // Reset timers
-    lastServerCheck = millis();
-    lastRecoveryAttempt = millis();
-    lastWatchdogReset = millis();
     
     Serial.println("\n=== Initialization Complete ===");
     Serial.print("Status: ");
@@ -287,27 +207,10 @@ bool initializeSystem() {
     if (fullInit) {
         displayManager->displayMessage("OK");
     } else {
-        displayManager->displayMessage("OFFLINE");
+        displayManager->displayMessage("---");
     }
     
-    return true;  // Return true even in degraded mode
-}
-
-void attemptRecovery() {
-    unsigned long currentMillis = millis();
-    if (currentMillis - lastRecoveryAttempt >= RECOVERY_DELAY) {
-        lastRecoveryAttempt = currentMillis;
-        Serial.println("Attempting system recovery...");
-        
-        if (initializeSystem()) {
-            systemInitialized = true;
-            Serial.println("System recovery successful");
-            displayManager->displayMessage("RECOVERED");
-        } else {
-            Serial.println("System recovery failed");
-            displayManager->displayError(static_cast<int>(ErrorCode::SYSTEM_RECOVERY_FAILED));
-        }
-    }
+    return fullInit;
 }
 
 void setup() {
@@ -315,144 +218,57 @@ void setup() {
     while (!Serial) {
         ; // Wait for serial port to connect
     }
+    
+    //Wait for serial initialization
+    delay(1000);
+
     Serial.println("\nStarting Waku system...");
     
     matrix.begin();
-    Serial.println("LED Matrix initialized");
-    
-    // Initialize display first for status messages
     displayManager = new DisplayManager(matrix);
-    Serial.println("Display manager initialized");
-    
-    // Initialize sensors
-    Serial.println("\nInitializing sensors...");
-    
-    Serial.println("Creating CO2 sensor instance...");
     co2Sensor = new CO2Sensor(CO2_PWM_PIN);
-    
-    Serial.println("Creating sound sensor instance...");
     soundSensor = new SoundSensor(MAX9814_PIN);
     
-    Serial.println("\nStarting CO2 sensor initialization...");
     if (!co2Sensor->begin()) {
         Serial.println("ERROR: Failed to initialize CO2 sensor");
         displayManager->displayError(static_cast<int>(ErrorCode::CO2_SENSOR_INIT_FAILED));
-    } else {
-        Serial.println("CO2 sensor initialization successful");
     }
     
-    Serial.println("\nStarting sound sensor initialization...");
     if (!soundSensor->begin()) {
         Serial.println("ERROR: Failed to initialize sound sensor");
         displayManager->displayError(static_cast<int>(ErrorCode::SOUND_SENSOR_INIT_FAILED));
-    } else {
-        Serial.println("Sound sensor initialization successful");
     }
     
     // Initialize the system
-    Serial.println("\nInitializing system...");
     systemInitialized = initializeSystem();
-}
+    
+    // Initialize FreeRTOS tasks
+    if (!TaskManager::initializeTasks(
+        alarm,
+        motionSensor,
+        serverClient,
+        displayManager,
+        co2Sensor,
+        soundSensor
+    )) {
+        Serial.println("ERROR: Failed to initialize tasks");
+        displayManager->displayError(static_cast<int>(ErrorCode::TASK_INIT_FAILED));
+        while(1); // Critical error - halt system
+    }
+    
+    // Start the FreeRTOS scheduler
+    vTaskStartScheduler();
+    Serial.println("Scheduler started. All systems operational.");
 
-void checkAndReportSensorData() {
-    unsigned long currentMillis = millis();
-    
-    // Check CO2 and sound sensors every 5 seconds
-    if (co2Sensor && co2Sensor->isTimeToRead()) {
-        if (co2Sensor->read()) {
-            Serial.print("CO2 Level: ");
-            Serial.print(co2Sensor->getCO2Level());
-            Serial.println(" ppm");
-        }
-    }
-    
-    if (soundSensor && soundSensor->isTimeToRead()) {
-        if (soundSensor->read()) {
-            Serial.print("Sound Level: ");
-            Serial.println(soundSensor->getVolume());
-        }
-    }
-    
-    // Report to server every 5 minutes
-    if (currentMillis - lastSensorReport >= SENSOR_REPORT_INTERVAL) {
-        lastSensorReport = currentMillis;
-        lastServerCheck = currentMillis; // Update server check time as well
-        
-        if (co2Sensor && soundSensor && serverClient && alarm) {
-            Serial.println("\n=== Sending Sensor Data and Checking Updates ===");
-            
-            DeviceUpdate update;
-            update.CO2Level = co2Sensor->getAverageCO2();  // Get 5-minute average
-            update.SoundLevel = soundSensor->getMaxVolume();  // Get 5-minute maximum
-            update.AlarmActive = alarm->isTriggered();
-            update.AlarmActiveTime = 0;  // Not tracking exact time
-            
-            int newHour, newMinute;
-            unsigned long currentTime;
-            if (serverClient->sendDeviceUpdateAndGetTime(update, newHour, newMinute, currentTime)) {
-                // Update RTC with server time
-                if (updateRTCFromUnixTime(currentTime)) {
-                    Serial.println("RTC updated successfully");
-                } else {
-                    Serial.println("Failed to update RTC time");
-                }
-                
-                // Update alarm time if changed
-                if (newHour != alarm->getWakeHour() || newMinute != alarm->getWakeMinute()) {
-                    Serial.print("Updating alarm time to ");
-                    Serial.print(newHour);
-                    Serial.print(":");
-                    Serial.println(newMinute);
-                    alarm->updateTime(newHour, newMinute);
-                } else {
-                    Serial.println("Alarm time unchanged");
-                }
-            } else {
-                Serial.println("Failed to communicate with server");
-                displayManager->displayError(static_cast<int>(ErrorCode::SERVER_CONNECTION_FAILED));
-            }
-            
-            Serial.println("==============================\n");
-        }
-    }
+    // If we get here, something went wrong with the scheduler
+    Serial.println("ERROR: Scheduler failed to start!");
+    displayManager->displayError(static_cast<int>(ErrorCode::TASK_INIT_FAILED));
+    while(1); // Critical error - halt system
 }
 
 void loop() {
-    // Handle watchdog reset
-    unsigned long currentMillis = millis();
-    if (currentMillis - lastWatchdogReset >= WATCHDOG_RESET_INTERVAL) {
-        lastWatchdogReset = currentMillis;
-    }
-    
-    // Check if system needs recovery
-    if (!systemInitialized) {
-        attemptRecovery();
-        return;
-    }
-    
-    // Normal operation - continue even without WiFi
-    if (WiFi.status() == WL_CONNECTED) {
-        ArduinoOTA.poll();
-    }
-    
-    // Always check and report sensor data, even without server connection
-    checkAndReportSensorData();
-    
-    if (alarm && motionSensor) {
-        // Check motion and stop alarm if needed
-        if (alarm->isWakeUpTime() && !alarm->isTriggered()) {
-            if (motionSensor->checkMotion()) {
-                alarm->stopAlarm();
-            }
-        }
-        
-        // Update alarm state
-        alarm->update();
-        
-        // Print motion debug info
-        motionSensor->printDebug(alarm->isWakeUpTime(), alarm->isTriggered());
-        
-        // Check for midnight reset
-        alarm->checkAndResetAtMidnight();
-    }
+    // Empty - FreeRTOS scheduler is running the tasks
+    // If we get here, something is wrong with the scheduler
+    Serial.println("ERROR: Main loop reached - scheduler not running!");
+    delay(1000);
 }

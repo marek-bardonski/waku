@@ -25,8 +25,8 @@ private:
     // Buzzer timing control
     unsigned long lastBuzzerTime = 0;
     bool isBuzzerActive = false;
-    const int INITIAL_INTERVAL = 10000;  // 10 seconds
-    const int FINAL_INTERVAL = 2000;     // 2 seconds
+    const int INITIAL_INTERVAL = 5000;  // 5 seconds
+    const int FINAL_INTERVAL = 200;     // 200ms
     
     // Calculate brightness based on progress
     int calculateBrightness(float progress, bool shouldFlash) const;

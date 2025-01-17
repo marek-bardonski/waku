@@ -7,8 +7,8 @@
 
 ## Prerequisites
 
-- Arduino UNO R4 WiFi board
-- Arduino IDE 2.x
+- Arduino UNO R4 WiFi board with Renesas RA4M1 processor
+- Arduino IDE 2.x (includes built-in FreeRTOS support for RA4M1)
 - USB-C cable to initiate the first upload
 - WiFi network access
 - An 'Arduino' starting set with small electronic components (LEDs, resistors, capacitors, etc.)
@@ -20,9 +20,11 @@ I've used a 15x15x5 cm wooden box as a base for the robot. The pins are connecte
 
 * 5V -> breadboard 5V bus
 * GND -> breadboard GND bus
+* PIN 2 (ADC) -> MH-Z19B CO2 sensor PWM output
 * PIN 9 (PWM) - Resistor [LED #1] -> 2N2222 base [LED #1]
 * PIN 10 (PWM)- Resistor [LED #2] -> 2N2222 base [LED #2]
 * PIN 11 (PWM)- Resistor [LED #3] -> 2N2222 base [LED #3]
+* PIN A0 (ADC) -> MAX9814 microphone input
 
 **TBC**
 
@@ -38,6 +40,8 @@ I've used a 15x15x5 cm wooden box as a base for the robot. The pins are connecte
    - `NTPClient`
    - `ArduinoOTA`
    - `ArduinoJSON`
+
+Note: FreeRTOS support is built into the Arduino IDE for the UNO R4 WiFi board. No additional installation is required.
 
 ### Installing ArduinoOTA with Extended Timeout
 To enable easy updates, this project is equipped with an OTA system. Unfortunatelly, the OTA library is known to be problematic and doesn't work out of the box on any of my computers. 
