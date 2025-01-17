@@ -117,5 +117,8 @@ This project is open-source and available under the MIT License.
 # TODO:
 - [ ] Notify the owner of ArduinoOTA of the problems in MacBook Silicon
 - [ ] Check if you can use ArduinoOTA via VMWare to flash the Arduino via cable
+- [ ] Implement hardware interrupts or hardware timer-based refreshing of the CO2 and Sound sensor readings
+- [ ] Implement FreeRTOS system for improved responsibility
+- [ ] Implement additional visual notifications about exceeding CO2 levels every 1k between 1k and 5k (add sounds over 3k)
 
 
