@@ -1,39 +1,100 @@
-# WAKU - an Arduino robot that always wakes you up on time. 
-## It detects missed wake-up alarms and wakes you up with gradually increasing light effects and sounds. 
+# WAKU Robot Documentation
+
+## WAKU
+
+Version: 0.3
+
+A robot that always wakes you up on time using a scientifically-proven protocol of dawn-simulating light.
+
+### Research Sources:
+- [PubMed Study](https://pubmed.ncbi.nlm.nih.gov/20408928/)
+- [Chronobiology Study](https://www.tandfonline.com/doi/abs/10.3109/07420528.2013.793196)
 
 ## Features
-* Version 0.1 - can be only programmed via API to wake-up at a specific time.
-* Version 0.2 [in-progress] - it is going to use a microphone to detect missed alarms automatically.
+- Wake-up alarm with gradual light progression using multicolor LED and buzzer.
+- Wi-Fi connectivity for wake-up time configuration (via home server). Home server is a separate repository.
+- Button functions:
+  - Disarm alarm during activation.
+  - Check alarm time and CO2 levels when idle.
+  - Long-press (3+ sec) disables next-day alarm.
+- OLED screen for alarm time/CO2 level display.
+- LED alert for CO2 levels exceeding 1000 ppm.
+- CO2 level detection & reporting to the home server.
 
-## Prerequisites
+## Hardware
+- **Microcontroller:** Arduino UNO R4 WiFi (Renesas RA4M1 processor)
+- **Power:** USB-C for initial upload
+- **Sensors:** 
+  - MH-Z19B CO2 sensor (PWM output)
+  - MAX9814 microphone
+- **Display:** OLED 0.91"
+- **Enclosure:** Wooden box (15x15x5 cm)
+- **Components:** Basic Arduino starter kit (LEDs, resistors, capacitors, etc.)
 
-- Arduino UNO R4 WiFi board with Renesas RA4M1 processor
-- Arduino IDE 2.x (includes built-in FreeRTOS support for RA4M1)
-- USB-C cable to initiate the first upload
-- WiFi network access
-- An 'Arduino' starting set with small electronic components (LEDs, resistors, capacitors, etc.)
+## Software
+- **Development Environment:** Arduino IDE 2.x (includes FreeRTOS for RA4M1)
+- Uses Interrupts and OpenRTOS for interactive control.
 
-## Assembling the kit
-I've used a 15x15x5 cm wooden box as a base for the robot. The pins are connected in the following way:
+### OpenRTOS Threads:
+- **`vAlarmTask`** (50ms): Checks alarm activation, light/buzzer updates.
+- **`vDisplayTask`** (50ms): Manages display updates via internal/external queues.
+- **`vNetworkTask`** (15,000ms): Updates CO2 sensor data to the server.
 
-### Arduino
+### Interrupts:
+- **CO2 Sensor (digitalPinToInterrupt)**: Tracks state changes, averages data, sends to server every `vNetworkTask` cycle.
+- **Button (digitalPinToInterrupt)**:
+  - Pressed during alarm → Stops alarm.
+  - Pressed outside of alarm → Shows alarm time or disabled status.
+  - Long press (>3 sec) → Disables next-day alarm.
 
-* 5V -> breadboard 5V bus
-* GND -> breadboard GND bus
-* PIN 2 (ADC) -> MH-Z19B CO2 sensor PWM output
-* PIN 9 (PWM) - Resistor [LED #1] -> 2N2222 base [LED #1]
-* PIN 10 (PWM)- Resistor [LED #2] -> 2N2222 base [LED #2]
-* PIN 11 (PWM)- Resistor [LED #3] -> 2N2222 base [LED #3]
-* PIN A0 (ADC) -> MAX9814 microphone input
+### Displays:
+- **Internal Display:** Shows error codes; remains blank if no error.
+- **External Display:** 
+  - CO2 levels (11:00-22:00)
+  - Alarm time (3 sec upon button press)
+  - Otherwise, remains off.
 
-**TBC**
+---
+
+## Wake-Up Protocol
+1. **Activation (T - 40 min):** Red light signals protocol start.
+2. **Light Ramp-Up (T - 30 min to Wake-Up):** 
+   - 10% dawn light starts, gradually reaching 100% at wake-up.
+3. **Full Alarm (Wake-Up Time +10 min):**
+   - Buzzer plays a melody at 120 bpm.
+   - Light starts flashing.
+
+```python
+# Define LED intensity ramping logic
+red = np.where(progress < 0.5, progress * 2 * 255, 255)
+green = np.clip((progress - 0.4) / 0.6, 0, 1) * 180
+blue = np.clip((progress - 0.6) / 0.4, 0, 1) * 120
+```
+
+## Assembling the Kit
+
+A wooden box (15x15x5 cm) is used as the base. The pin connections are as follows:
+
+### **Arduino Pin Connections**
+- **5V** → Breadboard 5V bus
+- **GND** → Breadboard GND bus
+- **PIN 2 (ADC)** → MH-Z19B CO2 sensor PWM output
+- **PIN 7 (DIGITAL)** → Button → GND (Requires PULL-UP)
+  - **Note:** Setting this pin as output may destroy the chip unless connected via a resistor.
+- **PIN 9 (PWM)** → Resistor → LED #1 → 2N2222 base
+- **PIN 10 (PWM)** → Resistor → LED #2 → 2N2222 base
+- **PIN 11 (PWM)** → Resistor → LED #3 → 2N2222 base
+- **PIN A0 (ADC)** → MAX9814 microphone input
+- **SDA/SCL** → OLED 0.91"
+
+---
 
 ## Required Libraries
 
 ### Installing Libraries via Arduino IDE
-1. Open Arduino IDE
-2. Go to Tools → Manage Libraries
-3. Search and install:
+1. Open **Arduino IDE**
+2. Go to **Tools → Manage Libraries**
+3. Search for and install:
    - `ArduinoGraphics`
    - `WiFiS3`
    - `Arduino_LED_Matrix`
@@ -41,7 +102,8 @@ I've used a 15x15x5 cm wooden box as a base for the robot. The pins are connecte
    - `ArduinoOTA`
    - `ArduinoJSON`
 
-Note: FreeRTOS support is built into the Arduino IDE for the UNO R4 WiFi board. No additional installation is required.
+> **Note:** FreeRTOS support is built into the Arduino IDE for the UNO R4 WiFi board.
+
 
 ### Installing ArduinoOTA with Extended Timeout
 To enable easy updates, this project is equipped with an OTA system. Unfortunatelly, the OTA library is known to be problematic and doesn't work out of the box on any of my computers. 
@@ -82,13 +144,6 @@ tools.arduino_ota.upload.pattern="{cmd}" -address "{upload.port.address}" -port 
    #define SECRET_PASS "your_wifi_password"
    ```
 
-## Features
-
-- Scrolling text display on LED matrix
-- WiFi connectivity with OTA update support
-- LED control on pins 9, 10, and 11
-- Built-in LED status indication
-
 ## OTA Updates
 
 1. Upload the initial sketch via USB
@@ -114,11 +169,13 @@ Feel free to submit issues and pull requests.
 
 This project is open-source and available under the MIT License.
 
-# TODO:
-- [ ] Notify the owner of ArduinoOTA of the problems in MacBook Silicon
-- [ ] Check if you can use ArduinoOTA via VMWare to flash the Arduino via cable
-- [ ] Implement hardware interrupts or hardware timer-based refreshing of the CO2 and Sound sensor readings
-- [ ] Implement FreeRTOS system for improved responsibility
-- [ ] Implement additional visual notifications about exceeding CO2 levels every 1k between 1k and 5k (add sounds over 3k)
+## TODO
+
+* [ ] Detecting missed wake-up alarms and triggering gradual light and sound effects.
+* [ ] Using movement sensors to detect movement in specific areas indicating a missed alarm.
+* [ ] Add sounds system that can replace buzzer to provide better quality of wake-up sound.
+* [ ] Implement stronger LED to better simulate dawn in the room eg. https://sklep.avt.pl/pl/products/dioda-led-f5-biala-60000mcd-172143.html?rec=101002105 + https://sklep.avt.pl/pl/products/oprawka-do-diod-led-5mm-metalowa-wypukla-typ2-180856.html 
+
+
 
 
