@@ -12,13 +12,13 @@ private:
     const int WAKE_DURATION;
     bool alarmTriggeredToday;
     
-    // Buzzer parameters
-    const int* BEEP_FREQUENCIES;
-    const int* BEEP_DURATIONS;
-    const int FREQ_STEPS;
-    
     // Progressive alarm handler
     ProgressiveAlarm progressiveAlarm;
+    
+    // Wake-up protocol timing (in minutes)
+    static const int PRE_WAKE_TIME = 40;    // Start red light 40 min before
+    static const int DAWN_START_TIME = 30;  // Start dawn simulation 30 min before
+    static const int FULL_ALARM_TIME = 10;  // Full alarm 10 min after wake time
     
     // Helper methods for time comparison
     int timeToMinutes(int hours, int minutes) const {
@@ -26,11 +26,11 @@ private:
     }
     
     int getWakeUpStartMinutes() const {
-        return timeToMinutes(WAKE_HOUR, WAKE_MINUTE);
+        return timeToMinutes(WAKE_HOUR, WAKE_MINUTE) - PRE_WAKE_TIME;
     }
     
     int getWakeUpEndMinutes() const {
-        return timeToMinutes(WAKE_HOUR, WAKE_MINUTE) + WAKE_DURATION;
+        return timeToMinutes(WAKE_HOUR, WAKE_MINUTE) + FULL_ALARM_TIME;
     }
     
     int getCurrentTimeMinutes() const {
@@ -42,6 +42,7 @@ private:
     float calculateProgress() const {
         int currentMinutes = getCurrentTimeMinutes();
         int wakeUpStart = getWakeUpStartMinutes();
+        int wakeUpTime = timeToMinutes(WAKE_HOUR, WAKE_MINUTE);
         int minutesElapsed = currentMinutes - wakeUpStart;
         
         // Handle case when we're after midnight
@@ -49,15 +50,25 @@ private:
             minutesElapsed = (24 * 60 - wakeUpStart) + currentMinutes;
         }
         
-        return float(minutesElapsed) / float(WAKE_DURATION);
+        // Calculate progress based on wake-up protocol phases
+        if (currentMinutes < (wakeUpTime - DAWN_START_TIME)) {
+            // Pre-wake phase (red light only)
+            return 0.0;
+        } else if (currentMinutes < wakeUpTime) {
+            // Dawn simulation phase
+            return float(currentMinutes - (wakeUpTime - DAWN_START_TIME)) / float(DAWN_START_TIME);
+        } else if (currentMinutes <= (wakeUpTime + FULL_ALARM_TIME)) {
+            // Full alarm phase
+            return 1.0;
+        }
+        
+        return 0.0;
     }
 
 public:
     Alarm(int wakeHour, int wakeMinute, int wakeDuration,
           const int* ledPins, int ledPinCount,
-          int buzzerPin,
-          const int* frequencies, const int* durations, int freqSteps,
-          int initialInterval, int finalInterval);
+          int buzzerPin, int buzzerOverdrivePin);
     
     bool isWakeUpTime();
     void checkAndResetAtMidnight();

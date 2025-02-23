@@ -2,17 +2,12 @@
 
 Alarm::Alarm(int wakeHour, int wakeMinute, int wakeDuration,
              const int* ledPins, int ledPinCount,
-             int buzzerPin,
-             const int* frequencies, const int* durations, int freqSteps,
-             int initialInterval, int finalInterval)
+             int buzzerPin, int buzzerOverdrivePin)
     : WAKE_HOUR(wakeHour)
     , WAKE_MINUTE(wakeMinute)
     , WAKE_DURATION(wakeDuration)
-    , BEEP_FREQUENCIES(frequencies)
-    , BEEP_DURATIONS(durations)
-    , FREQ_STEPS(freqSteps)
     , alarmTriggeredToday(false)
-    , progressiveAlarm(ledPins[1], ledPins[2], ledPins[0], buzzerPin)  // Red=10, Green=11, Blue=9
+    , progressiveAlarm(ledPins[1], ledPins[2], ledPins[0], buzzerPin, buzzerOverdrivePin)  // Red=10, Green=11, Blue=9
 {
     // Constructor body is empty as initialization is done in initializer list
 }
@@ -58,13 +53,14 @@ void Alarm::stopAlarm() {
 void Alarm::update() {
     if (isWakeUpTime() && !alarmTriggeredToday) {
         float progress = calculateProgress();
-        progressiveAlarm.update(progress, BEEP_FREQUENCIES, BEEP_DURATIONS, FREQ_STEPS);
+        progressiveAlarm.update(progress);
     } else {
         progressiveAlarm.stop();
     }
 }
 
 bool Alarm::updateTime(int newHour, int newMinute) {
+    
     if (newHour < 0 || newHour >= 24 || newMinute < 0 || newMinute >= 60) {
         return false;
     }

@@ -1,90 +1,89 @@
 #include "progressive_alarm.h"
 
-int ProgressiveAlarm::calculateBrightness(float progress, bool shouldFlash) const {
-    if (!shouldFlash) {
-        return map(progress * 100, 0, 100, 1, 255);
+void ProgressiveAlarm::calculateLEDIntensities(float progress, int& red, int& green, int& blue) const {
+    // Pre-wake phase (progress = 0): Red light ramps up to 10% intensity
+    if (progress <= 0.0) {
+        // Calculate time since start for initial ramp-up
+        unsigned long currentMillis = millis();
+        unsigned long timeSinceStart = currentMillis - rampStartTime;
+        
+        // Ramp from 0% to 10% over 10 minutes
+        red = map(constrain(timeSinceStart, 0, INITIAL_RAMP_DURATION), 0, INITIAL_RAMP_DURATION, 0, 25);
+        green = 0;
+        blue = 0;
+        return;
     }
     
-    // If flashing is active, return either full brightness or off based on flash state
-    return flashState ? 255 : 0;
-}
-
-int ProgressiveAlarm::calculateBuzzerInterval(float progress) const {
-    // Map progress to interval, but only after BUZZER_THRESHOLD
-    float adjustedProgress = (progress - BUZZER_THRESHOLD) / (1.0 - BUZZER_THRESHOLD);
-    adjustedProgress = constrain(adjustedProgress, 0, 1);
+    // Full alarm phase (progress = 1.0): Flash all LEDs
+    if (progress >= 1.0) {
+        if (flashState) {
+            red = 255;
+            green = 180;
+            blue = 120;
+        } else {
+            red = 0;
+            green = 0;
+            blue = 0;
+        }
+        return;
+    }
     
-    return map(adjustedProgress * 100, 0, 100, INITIAL_INTERVAL, FINAL_INTERVAL);
+    // Dawn simulation phase (0.0 < progress < 1.0)
+    // Start from 10% (25) and implement the exact formula from README
+    red = progress < 0.5 ? 
+          map(progress * 100, 0, 50, 25, 255) : // Ramp from 10% to 100%
+          255;
+    green = constrain((progress - 0.4) / 0.6 * 180, 0, 180);
+    blue = constrain((progress - 0.6) / 0.4 * 120, 0, 120);
 }
 
-void ProgressiveAlarm::update(float progress, const int* frequencies, const int* durations, int freqSteps) {
+void ProgressiveAlarm::playNextNote() {
+    if (currentNoteIndex >= THEME_LENGTH) {
+        currentNoteIndex = 0;  // Loop back to start
+    }
+    
+    // Play the current note
+    tone(BUZZER_PIN, THEME_NOTES[currentNoteIndex], NOTE_DURATIONS[currentNoteIndex]);
+    lastBuzzerTime = millis();
+    isBuzzerActive = true;
+    currentNoteIndex++;
+}
+
+void ProgressiveAlarm::update(float progress) {
     unsigned long currentMillis = millis();
     
-    // Handle flashing timing if past flash threshold
-    bool shouldFlash = progress >= FLASH_THRESHOLD;
-    if (shouldFlash) {
+    // Handle flashing timing for full alarm phase
+    if (progress >= FLASH_START) {
         if (currentMillis - lastFlashTime >= FLASH_INTERVAL) {
             lastFlashTime = currentMillis;
             flashState = !flashState;
         }
     }
     
-    // Calculate base brightness
-    int brightness = calculateBrightness(progress, shouldFlash);
-    
-    // Red LED is always on after start
-    analogWrite(RED_PIN, brightness);
-    
-    // Green LED turns on after GREEN_THRESHOLD
-    if (progress >= GREEN_THRESHOLD) {
-        analogWrite(GREEN_PIN, brightness);
-    } else {
-        analogWrite(GREEN_PIN, 0);
-    }
-    
-    // Blue LED turns on after BLUE_THRESHOLD
-    if (progress >= BLUE_THRESHOLD) {
-        analogWrite(BLUE_PIN, brightness);
-    } else {
-        analogWrite(BLUE_PIN, 0);
-    }
+    // Calculate and set LED intensities
+    int red, green, blue;
+    calculateLEDIntensities(progress, red, green, blue);
+    analogWrite(RED_PIN, red);
+    analogWrite(GREEN_PIN, green);
+    analogWrite(BLUE_PIN, blue);
     
     // Buzzer control
-    if (progress >= BUZZER_THRESHOLD) {
-        int currentInterval = calculateBuzzerInterval(progress);
-        
-        // Check if it's time for a new buzzer cycle
-        if (!isBuzzerActive && currentMillis - lastBuzzerTime >= currentInterval) {
-            // Calculate buzzer parameters based on progress
-            int freqIndex = map(progress * 100, 
-                              BUZZER_THRESHOLD * 100, 100, 
-                              0, freqSteps - 1);
-            freqIndex = constrain(freqIndex, 0, freqSteps - 1);
-            
-            // Start new buzzer cycle
-            if (!shouldFlash || flashState) {
-                tone(BUZZER_PIN, frequencies[freqIndex], durations[freqIndex]);
-                isBuzzerActive = true;
-                lastBuzzerTime = currentMillis;
-                
-                // Debug output
-                Serial.print("Buzzer: Interval=");
-                Serial.print(currentInterval);
-                Serial.print("ms, Freq=");
-                Serial.print(frequencies[freqIndex]);
-                Serial.print("Hz, Duration=");
-                Serial.print(durations[freqIndex]);
-                Serial.println("ms");
-            }
-        } else if (isBuzzerActive && currentMillis - lastBuzzerTime >= durations[0]) {
-            // Turn off buzzer after duration
+    if (progress >= BUZZER_START) {
+        if (!isBuzzerActive) {
+            // Start next note
+            playNextNote();
+        } else if (currentMillis - lastBuzzerTime >= NOTE_DURATIONS[currentNoteIndex > 0 ? currentNoteIndex - 1 : THEME_LENGTH - 1]) {
+            // Previous note finished, turn off buzzer and prepare for next note
             noTone(BUZZER_PIN);
+            noTone(BUZZER_OVERDRIVE_PIN);
             isBuzzerActive = false;
         }
     } else {
         noTone(BUZZER_PIN);
+        noTone(BUZZER_OVERDRIVE_PIN);
         isBuzzerActive = false;
-    }
+        currentNoteIndex = 0;  // Reset to start of theme
+    }   
 }
 
 void ProgressiveAlarm::stop() {
@@ -92,6 +91,9 @@ void ProgressiveAlarm::stop() {
     analogWrite(GREEN_PIN, 0);
     analogWrite(BLUE_PIN, 0);
     noTone(BUZZER_PIN);
+    noTone(BUZZER_OVERDRIVE_PIN);
     flashState = false;
     isBuzzerActive = false;
+    currentNoteIndex = 0;  // Reset theme position
+    rampStartTime = millis(); // Reset ramp start time when stopping
 } 

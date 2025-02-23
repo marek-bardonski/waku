@@ -13,7 +13,7 @@ bool ServerClient::sendDeviceUpdateAndGetTime(const DeviceUpdate& update, int& h
     StaticJsonDocument<200> doc;
     doc["error_code"] = getErrorString(update.error);
     doc["co2_level"] = update.CO2Level;
-    doc["sound_level"] = update.SoundLevel;
+    doc["sound_level"] = 0; // for legacy reasons now.
     doc["alarm_active"] = update.AlarmActive;
     doc["alarm_active_time"] = update.AlarmActiveTime;
     
@@ -34,10 +34,10 @@ bool ServerClient::sendDeviceUpdateAndGetTime(const DeviceUpdate& update, int& h
     currentTime = serverResponse.currentTime + 3600; // Add one hour (3600 seconds) to UTC time
     
     if (parseTimeString(serverResponse.alarmTime.c_str(), hour, minute)) {
-        char message[20];
-        snprintf(message, sizeof(message), "ALARM %02d:%02d", hour, minute);
-        displayManager.displayMessage(message);
-        return true;
+        // Update the alarm time if we have a valid alarm object (first time we don't have it.)
+        if (alarm && alarm->updateTime(hour, minute)) 
+        {}
+            return true;
     }
     
     logError(ErrorCode::INVALID_TIME_FORMAT, "Invalid time format");
@@ -85,9 +85,10 @@ String ServerClient::makeHttpRequest(const char* endpoint, const String& jsonBod
         logError(ErrorCode::SERVER_CONNECTION_FAILED, "Failed to connect to server");
         return "";
     }
-    
+    /* Debugging
     Serial.print("Making request to: ");
     Serial.println(endpoint);
+    */
     
     // Make HTTP request
     client.print("POST ");
@@ -102,8 +103,10 @@ String ServerClient::makeHttpRequest(const char* endpoint, const String& jsonBod
     client.println();
     client.println(jsonBody);
     
+    /* Debugging
     Serial.print("Request body: ");
     Serial.println(jsonBody);
+    */
     
     // Wait for response
     unsigned long timeout = millis();
@@ -132,9 +135,9 @@ String ServerClient::makeHttpRequest(const char* endpoint, const String& jsonBod
     // Read response body
     String response = client.readString();
     client.stop();
-    
+    /* Debugging
     Serial.print("Response: ");
     Serial.println(response);
-    
+    */
     return response;
 } 

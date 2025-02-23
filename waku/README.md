@@ -36,7 +36,7 @@ A robot that always wakes you up on time using a scientifically-proven protocol 
 - Uses Interrupts and OpenRTOS for interactive control.
 
 ### OpenRTOS Threads:
-- **`vAlarmTask`** (50ms): Checks alarm activation, light/buzzer updates.
+- **`vAlarmTask`** (10ms): Checks alarm activation, light/buzzer updates, button handling.
 - **`vDisplayTask`** (50ms): Manages display updates via internal/external queues.
 - **`vNetworkTask`** (15,000ms): Updates CO2 sensor data to the server.
 
@@ -57,7 +57,7 @@ A robot that always wakes you up on time using a scientifically-proven protocol 
 ---
 
 ## Wake-Up Protocol
-1. **Activation (T - 40 min):** Red light signals protocol start.
+1. **Activation (T - 40 min):** Red light signals protocol start and slowly ramps up to 10% intensity
 2. **Light Ramp-Up (T - 30 min to Wake-Up):** 
    - 10% dawn light starts, gradually reaching 100% at wake-up.
 3. **Full Alarm (Wake-Up Time +10 min):**
@@ -79,12 +79,14 @@ A wooden box (15x15x5 cm) is used as the base. The pin connections are as follow
 - **5V** → Breadboard 5V bus
 - **GND** → Breadboard GND bus
 - **PIN 2 (ADC)** → MH-Z19B CO2 sensor PWM output
-- **PIN 7 (DIGITAL)** → Button → GND (Requires PULL-UP)
+- **PIN 3 (DIGITAL)** → Button → GND (Requires PULL-UP)
   - **Note:** Setting this pin as output may destroy the chip unless connected via a resistor.
 - **PIN 9 (PWM)** → Resistor → LED #1 → 2N2222 base
 - **PIN 10 (PWM)** → Resistor → LED #2 → 2N2222 base
 - **PIN 11 (PWM)** → Resistor → LED #3 → 2N2222 base
-- **PIN A0 (ADC)** → MAX9814 microphone input
+- **PIN 12 (PWM)** → Buzzer -> 330 OHM -> GND
+- **PIN 6 (PWM)** → Buzzer -> GND
+- **PIN A0 (ADC)** → MAX9814 microphone out
 - **SDA/SCL** → OLED 0.91"
 
 ---

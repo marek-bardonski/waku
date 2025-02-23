@@ -11,7 +11,6 @@ int freeMemory() {
 
 // Task handles initialization
 TaskHandle_t alarmTaskHandle = NULL;
-TaskHandle_t sensorTaskHandle = NULL;
 TaskHandle_t networkTaskHandle = NULL;
 TaskHandle_t displayTaskHandle = NULL;
 
@@ -20,34 +19,35 @@ SemaphoreHandle_t wifiMutex = NULL;
 SemaphoreHandle_t displayMutex = NULL;
 
 // Queues initialization
-QueueHandle_t sensorDataQueue = NULL;
 QueueHandle_t alarmStateQueue = NULL;
 
 // Static member initialization
 bool TaskManager::tasksInitialized = false;
 
+// Struct for display task parameters
+struct DisplayTaskParams {
+    DisplayManager* display;
+    CO2Sensor* co2Sensor;
+};
+
+struct NetworkTaskParams {
+    ServerClient* server;
+    CO2Sensor* co2Sensor;
+};
+
 void vAlarmTask(void *pvParameters) {
-    Serial.println("Alarm Task started");
-    Alarm* alarm = (Alarm*)pvParameters;
+    AlarmTaskParams* params = (AlarmTaskParams*)pvParameters;
+    Alarm* alarm = params->alarm;
+    ButtonHandler* button = params->button;
     
     TickType_t xLastWakeTime = xTaskGetTickCount();
-    const TickType_t xFrequency = pdMS_TO_TICKS(100); // 100ms period
+    const TickType_t xFrequency = pdMS_TO_TICKS(10); // 10ms period as per README
     
     for(;;) {
         if (alarm) {
             // Check and update alarm state
             bool isWakeTime = alarm->isWakeUpTime();
             bool isTriggered = alarm->isTriggered();
-            
-            // Check motion sensor data
-            SensorData sensorData;
-            if (isWakeTime && !isTriggered && xQueuePeek(sensorDataQueue, &sensorData, 0) == pdTRUE) {
-                if (sensorData.motionDetected) {
-                    Serial.println("Motion detected during wake-up time - stopping alarm");
-                    alarm->stopAlarm();
-                    isTriggered = true;
-                }
-            }
             
             // Update alarm
             alarm->update();
@@ -59,100 +59,49 @@ void vAlarmTask(void *pvParameters) {
             // Check for midnight reset
             alarm->checkAndResetAtMidnight();
         }
+
+        // Update button state
+        if (button) {
+            button->update();
+        }
         
         // Wait for the next cycle
         vTaskDelayUntil(&xLastWakeTime, xFrequency);
     }
 }
 
-void vSensorTask(void *pvParameters) {
-    Serial.println("Sensor Task started");
-    struct {
-        CO2Sensor* co2;
-        SoundSensor* sound;
-        MotionSensor* motion;
-    } *sensors = (decltype(sensors))pvParameters;
-    
-    TickType_t xLastWakeTime = xTaskGetTickCount();
-    const TickType_t xFrequency = pdMS_TO_TICKS(1000); // 1 second period
-    static uint32_t diagnosticsCounter = 0;
-    
-    for(;;) {
-        SensorData data = {0};
-        bool readSuccess = true;
-        
-        // Read CO2 sensor
-        if (sensors->co2 && sensors->co2->isTimeToRead()) {
-            int co2_ppm = sensors->co2->readPWM();
-            if (co2_ppm >= 0) {
-                data.co2Level = co2_ppm;
-                Serial.print("CO2 reading successful: ");
-                Serial.println(co2_ppm);
-            } else {
-                Serial.println("CO2 reading failed");
-                readSuccess = false;
-            }
-        }
-        
-        // Read sound sensor
-        if (sensors->sound && sensors->sound->isTimeToRead()) {
-            if (!sensors->sound->read()) {
-                Serial.println("Sound sensor read failed");
-                readSuccess = false;
-            }
-            data.soundLevel = sensors->sound->getVolume();
-        }
-        
-        // Check motion sensor
-        if (sensors->motion) {
-            data.motionDetected = sensors->motion->checkMotion();
-        }
-        
-        // Send sensor data to queue only if we have valid readings
-        if (readSuccess) {
-            xQueueOverwrite(sensorDataQueue, &data);
-        } else {
-            Serial.println("Sensor read failed");
-        }
-                
-        // Wait for the next cycle
-        vTaskDelayUntil(&xLastWakeTime, xFrequency);
-    }
-}
 
 void vNetworkTask(void *pvParameters) {
-    Serial.println("Network Task started");
-    ServerClient* server = (ServerClient*)pvParameters;
+    NetworkTaskParams* params = (NetworkTaskParams*)pvParameters;
+    ServerClient* server = params->server;
+    CO2Sensor* co2Sensor = params->co2Sensor;
+
     static uint32_t updateFailCount = 0;
     
     TickType_t xLastWakeTime = xTaskGetTickCount();
-    const TickType_t xFrequency = pdMS_TO_TICKS(60 * 1000); // 1 minute period
+    const TickType_t xFrequency = pdMS_TO_TICKS(15000); // 15 seconds as per README
     
     for(;;) {
         if (server && xSemaphoreTake(wifiMutex, pdMS_TO_TICKS(1000)) == pdTRUE) {
-            SensorData sensorData;
-            if (xQueuePeek(sensorDataQueue, &sensorData, 0) == pdTRUE) {
-                DeviceUpdate update;
-                update.CO2Level = sensorData.co2Level;
-                update.SoundLevel = sensorData.soundLevel;
+
+            DeviceUpdate update;
+            update.CO2Level = co2Sensor->readPWM();
                 
-                AlarmState alarmState;
-                if (xQueuePeek(alarmStateQueue, &alarmState, 0) == pdTRUE) {
-                    update.AlarmActive = alarmState.isTriggered;
-                }
-                
-                int newHour, newMinute;
-                unsigned long currentTime;
-                if (!server->sendDeviceUpdateAndGetTime(update, newHour, newMinute, currentTime)) {
-                    updateFailCount++;
-                    Serial.print("Network update failed. Total fails: ");
-                    Serial.println(updateFailCount);
-                } else {
-                    Serial.println("Network update successful");
-                    updateFailCount = 0;
-                }
+            AlarmState alarmState;
+            if (xQueuePeek(alarmStateQueue, &alarmState, 0) == pdTRUE) {
+                update.AlarmActive = alarmState.isTriggered;
             }
-            
+                
+            int newHour, newMinute;
+            unsigned long currentTime;
+            if (!server->sendDeviceUpdateAndGetTime(update, newHour, newMinute, currentTime)) {
+                updateFailCount++;
+                Serial.print("Network update failed. Total fails: ");
+                Serial.println(updateFailCount);
+            } else {
+                //Serial.println("Network update successful");
+                updateFailCount = 0;
+            }
             xSemaphoreGive(wifiMutex);
         } else {
             Serial.println("Failed to acquire WiFi mutex for network update");
@@ -164,26 +113,27 @@ void vNetworkTask(void *pvParameters) {
 }
 
 void vDisplayTask(void *pvParameters) {
-    Serial.println("Display Task started");
-    DisplayManager* display = (DisplayManager*)pvParameters;
+    DisplayTaskParams* params = (DisplayTaskParams*)pvParameters;
+    DisplayManager* display = params->display;
+    CO2Sensor* co2Sensor = params->co2Sensor;
     
     TickType_t xLastWakeTime = xTaskGetTickCount();
-    const TickType_t xFrequency = pdMS_TO_TICKS(100); // 100ms period
+    const TickType_t xFrequency = pdMS_TO_TICKS(50); // 50ms as per README
     
     for(;;) {
         if (display && xSemaphoreTake(displayMutex, pdMS_TO_TICKS(100)) == pdTRUE) {
-            // Update display based on alarm and sensor states
-            AlarmState alarmState;
-            if (xQueuePeek(alarmStateQueue, &alarmState, 0) == pdTRUE) {
-                if (!display->isBusy()) {  // Only update if not currently displaying
-                    if (alarmState.isWakeUpTime) {
-                        display->displayMessage("##");
-                    } else {
-                        display->displayMessage("");
-                    }
-                }
+            RTCTime currentTime;
+            RTC.getTime(currentTime);
+            int currentHour = currentTime.getHour();
+
+            /*
+            Not needed now.
+            if (currentHour >= 11 && currentHour <= 22 && co2Sensor) {
+                int co2Level = co2Sensor->readPWM();
+                display->displayCO2Level(co2Level);
             }
-            
+            */
+
             // Update the display state
             display->update();
             
@@ -197,11 +147,10 @@ void vDisplayTask(void *pvParameters) {
 
 bool TaskManager::initializeTasks(
     Alarm* alarm,
-    MotionSensor* motionSensor,
     ServerClient* serverClient,
     DisplayManager* displayManager,
     CO2Sensor* co2Sensor,
-    SoundSensor* soundSensor
+    ButtonHandler* buttonHandler
 ) {
     if (tasksInitialized) {
         return false;
@@ -221,21 +170,18 @@ bool TaskManager::initializeTasks(
         Serial.println("ERROR: Failed to create semaphores");
         return false;
     }
-    Serial.println("Semaphores created successfully");
     
     // Initialize semaphores to available state
     xSemaphoreGive(wifiMutex);
     xSemaphoreGive(displayMutex);
     
     // Create queues
-    sensorDataQueue = xQueueCreate(1, sizeof(SensorData));
     alarmStateQueue = xQueueCreate(1, sizeof(AlarmState));
     
-    if (!sensorDataQueue || !alarmStateQueue) {
+    if (!alarmStateQueue) {
         Serial.println("ERROR: Failed to create queues");
         return false;
     }
-    Serial.println("Queues created successfully");
     
     Serial.print("Free RAM after queues: ");
     Serial.println(freeMemory());
@@ -243,19 +189,34 @@ bool TaskManager::initializeTasks(
     // Create sensor data structure
     static struct {
         CO2Sensor* co2;
-        SoundSensor* sound;
-        MotionSensor* motion;
-    } sensors = {co2Sensor, soundSensor, motionSensor};
+    } sensors = {co2Sensor};
+    
+    // Create network task parameters
+    static NetworkTaskParams networkParams = {
+        .server = serverClient,
+        .co2Sensor = co2Sensor
+    };
+    
+    // Create alarm task parameters
+    static AlarmTaskParams alarmParams = {
+        .alarm = alarm,
+        .button = buttonHandler
+    };
+    
+    // Create display task parameters
+    static DisplayTaskParams displayParams = {
+        .display = displayManager,
+        .co2Sensor = co2Sensor
+    };
     
     // Create tasks
     BaseType_t status = pdPASS;
     
-    Serial.println("Creating Alarm Task...");
     status = xTaskCreate(
         vAlarmTask,
         "AlarmTask",
         ALARM_STACK_SIZE,
-        (void*)alarm,
+        (void*)&alarmParams,
         ALARM_TASK_PRIORITY,
         &alarmTaskHandle
     );
@@ -269,28 +230,11 @@ bool TaskManager::initializeTasks(
     Serial.print("Free RAM after Alarm Task: ");
     Serial.println(freeMemory());
     
-    Serial.println("Creating Sensor Task...");
-    status = xTaskCreate(
-        vSensorTask,
-        "SensorTask",
-        SENSOR_STACK_SIZE,
-        (void*)&sensors,
-        SENSOR_TASK_PRIORITY,
-        &sensorTaskHandle
-    );
-    if (status != pdPASS) {
-        Serial.println("ERROR: Failed to create Sensor Task");
-        Serial.print("Free RAM: ");
-        Serial.println(freeMemory());
-        return false;
-    }
-    
-    Serial.println("Creating Network Task...");
     status = xTaskCreate(
         vNetworkTask,
         "NetworkTask",
         NETWORK_STACK_SIZE,
-        (void*)serverClient,
+        (void*)&networkParams,
         NETWORK_TASK_PRIORITY,
         &networkTaskHandle
     );
@@ -299,12 +243,11 @@ bool TaskManager::initializeTasks(
         return false;
     }
     
-    Serial.println("Creating Display Task...");
     status = xTaskCreate(
         vDisplayTask,
         "DisplayTask",
         DISPLAY_STACK_SIZE,
-        (void*)displayManager,
+        (void*)&displayParams,
         DISPLAY_TASK_PRIORITY,
         &displayTaskHandle
     );
@@ -316,7 +259,6 @@ bool TaskManager::initializeTasks(
     Serial.println("All tasks created successfully");
     Serial.println("Stack sizes (words):");
     Serial.print("Alarm: "); Serial.println(ALARM_STACK_SIZE);
-    Serial.print("Sensor: "); Serial.println(SENSOR_STACK_SIZE);
     Serial.print("Network: "); Serial.println(NETWORK_STACK_SIZE);
     Serial.print("Display: "); Serial.println(DISPLAY_STACK_SIZE);
     
@@ -326,14 +268,12 @@ bool TaskManager::initializeTasks(
 
 void TaskManager::suspendAllTasks() {
     if (alarmTaskHandle) vTaskSuspend(alarmTaskHandle);
-    if (sensorTaskHandle) vTaskSuspend(sensorTaskHandle);
     if (networkTaskHandle) vTaskSuspend(networkTaskHandle);
     if (displayTaskHandle) vTaskSuspend(displayTaskHandle);
 }
 
 void TaskManager::resumeAllTasks() {
     if (alarmTaskHandle) vTaskResume(alarmTaskHandle);
-    if (sensorTaskHandle) vTaskResume(sensorTaskHandle);
     if (networkTaskHandle) vTaskResume(networkTaskHandle);
     if (displayTaskHandle) vTaskResume(displayTaskHandle);
 } 

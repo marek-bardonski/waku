@@ -23,7 +23,7 @@ void CO2Sensor::pulseISR() {
             pulseComplete = false;
             lastPulseTotal = micros() - pulseStartTime;
             if (lastPulseTotal > 900000 && lastPulseTotal < 1100000) {
-                lastPPM = 2000 * (lastPulseWidth - 2000) / (lastPulseTotal - 4000);
+                lastPPM = 5000 * (lastPulseWidth - 2000) / (lastPulseTotal - 4000);
             } // else ignore the pulse as it's not valid
         }
         // Rising edge - starting the pulse

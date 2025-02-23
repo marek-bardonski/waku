@@ -7,7 +7,6 @@
 #include "display_manager.h"
 #include "error_codes.h"
 #include "co2_sensor.h"
-#include "sound_sensor.h"
 #include "alarm.h"
 
 struct DeviceUpdate {
@@ -31,7 +30,6 @@ private:
     WiFiClient client;
     DisplayManager& displayManager;
     CO2Sensor* co2Sensor;
-    SoundSensor* soundSensor;
     Alarm* alarm;
     
     bool parseTimeString(const char* timeStr, int& hour, int& minute);
@@ -41,9 +39,9 @@ private:
     
 public:
     ServerClient(const char* host, int port, DisplayManager& display, 
-                CO2Sensor* co2, SoundSensor* sound, Alarm* alm) 
+                CO2Sensor* co2, Alarm* alm) 
         : serverHost(host), serverPort(port), displayManager(display),
-          co2Sensor(co2), soundSensor(sound), alarm(alm) {}
+          co2Sensor(co2), alarm(alm) {}
     
     bool sendDeviceUpdateAndGetTime(const DeviceUpdate& update, int& hour, int& minute, unsigned long& currentTime);
 };
