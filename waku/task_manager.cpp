@@ -89,7 +89,7 @@ void vNetworkTask(void *pvParameters) {
                 
             AlarmState alarmState;
             if (xQueuePeek(alarmStateQueue, &alarmState, 0) == pdTRUE) {
-                update.AlarmActive = alarmState.isTriggered;
+                update.AlarmActive = !alarmState.isTriggered;
             }
                 
             int newHour, newMinute;
@@ -186,28 +186,34 @@ bool TaskManager::initializeTasks(
     Serial.print("Free RAM after queues: ");
     Serial.println(freeMemory());
     
-    // Create sensor data structure
-    static struct {
-        CO2Sensor* co2;
-    } sensors = {co2Sensor};
+    // Create task parameters on heap to ensure they remain valid
+    // These will not be freed as they need to persist for the lifetime of the tasks
+    NetworkTaskParams* networkParams = new NetworkTaskParams();
+    if (!networkParams) {
+        Serial.println("ERROR: Failed to allocate network parameters");
+        return false;
+    }
+    networkParams->server = serverClient;
+    networkParams->co2Sensor = co2Sensor;
     
-    // Create network task parameters
-    static NetworkTaskParams networkParams = {
-        .server = serverClient,
-        .co2Sensor = co2Sensor
-    };
+    AlarmTaskParams* alarmParams = new AlarmTaskParams();
+    if (!alarmParams) {
+        Serial.println("ERROR: Failed to allocate alarm parameters");
+        delete networkParams;
+        return false;
+    }
+    alarmParams->alarm = alarm;
+    alarmParams->button = buttonHandler;
     
-    // Create alarm task parameters
-    static AlarmTaskParams alarmParams = {
-        .alarm = alarm,
-        .button = buttonHandler
-    };
-    
-    // Create display task parameters
-    static DisplayTaskParams displayParams = {
-        .display = displayManager,
-        .co2Sensor = co2Sensor
-    };
+    DisplayTaskParams* displayParams = new DisplayTaskParams();
+    if (!displayParams) {
+        Serial.println("ERROR: Failed to allocate display parameters");
+        delete networkParams;
+        delete alarmParams;
+        return false;
+    }
+    displayParams->display = displayManager;
+    displayParams->co2Sensor = co2Sensor;
     
     // Create tasks
     BaseType_t status = pdPASS;
@@ -216,7 +222,7 @@ bool TaskManager::initializeTasks(
         vAlarmTask,
         "AlarmTask",
         ALARM_STACK_SIZE,
-        (void*)&alarmParams,
+        (void*)alarmParams,
         ALARM_TASK_PRIORITY,
         &alarmTaskHandle
     );
@@ -224,6 +230,9 @@ bool TaskManager::initializeTasks(
         Serial.println("ERROR: Failed to create Alarm Task");
         Serial.print("Free RAM: ");
         Serial.println(freeMemory());
+        delete networkParams;
+        delete alarmParams;
+        delete displayParams;
         return false;
     }
     
@@ -234,12 +243,15 @@ bool TaskManager::initializeTasks(
         vNetworkTask,
         "NetworkTask",
         NETWORK_STACK_SIZE,
-        (void*)&networkParams,
+        (void*)networkParams,
         NETWORK_TASK_PRIORITY,
         &networkTaskHandle
     );
     if (status != pdPASS) {
         Serial.println("ERROR: Failed to create Network Task");
+        delete networkParams;
+        delete displayParams;
+        vTaskDelete(alarmTaskHandle);
         return false;
     }
     
@@ -247,12 +259,16 @@ bool TaskManager::initializeTasks(
         vDisplayTask,
         "DisplayTask",
         DISPLAY_STACK_SIZE,
-        (void*)&displayParams,
+        (void*)displayParams,
         DISPLAY_TASK_PRIORITY,
         &displayTaskHandle
     );
     if (status != pdPASS) {
         Serial.println("ERROR: Failed to create Display Task");
+        delete networkParams;
+        delete displayParams;
+        vTaskDelete(alarmTaskHandle);
+        vTaskDelete(networkTaskHandle);
         return false;
     }
     

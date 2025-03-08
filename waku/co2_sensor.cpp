@@ -15,16 +15,22 @@ static volatile unsigned long fallingCount = 0;
 static volatile unsigned long lastPPM = 0;
 
 void CO2Sensor::pulseISR() {
+    if (!instance) return; // Prevent null pointer dereference
+    
     interruptCount++;
     if (digitalRead(instance->pwmPin) == HIGH) {
         if (pulseComplete == true) {
-
+            // Enter critical section to atomically update shared state
+            noInterrupts();
+            
             //Finishing the pulse
             pulseComplete = false;
             lastPulseTotal = micros() - pulseStartTime;
             if (lastPulseTotal > 900000 && lastPulseTotal < 1100000) {
                 lastPPM = 5000 * (lastPulseWidth - 2000) / (lastPulseTotal - 4000);
             } // else ignore the pulse as it's not valid
+            
+            interrupts();
         }
         // Rising edge - starting the pulse
         risingCount++;
@@ -33,8 +39,10 @@ void CO2Sensor::pulseISR() {
         // Falling edge - entering the low state
         fallingCount++;
         if (pulseStartTime > 0) {  // Ensure we had a valid start time
+            noInterrupts();
             lastPulseWidth = micros() - pulseStartTime;
             pulseComplete = true;
+            interrupts();
         }
     }
 }

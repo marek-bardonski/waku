@@ -10,7 +10,7 @@ void ServerClient::logError(ErrorCode error, const char* message) {
 
 bool ServerClient::sendDeviceUpdateAndGetTime(const DeviceUpdate& update, int& hour, int& minute, unsigned long& currentTime) {
     // Create JSON document
-    StaticJsonDocument<200> doc;
+    StaticJsonDocument<512> doc;
     doc["error_code"] = getErrorString(update.error);
     doc["co2_level"] = update.CO2Level;
     doc["sound_level"] = 0; // for legacy reasons now.
@@ -35,9 +35,12 @@ bool ServerClient::sendDeviceUpdateAndGetTime(const DeviceUpdate& update, int& h
     
     if (parseTimeString(serverResponse.alarmTime.c_str(), hour, minute)) {
         // Update the alarm time if we have a valid alarm object (first time we don't have it.)
-        if (alarm && alarm->updateTime(hour, minute)) 
-        {}
+        if (alarm && alarm->updateTime(hour, minute)) {
             return true;
+        } else if (alarm == nullptr) {
+            // No alarm object yet, but time parsing succeeded
+            return true;
+        }
     }
     
     logError(ErrorCode::INVALID_TIME_FORMAT, "Invalid time format");
@@ -45,7 +48,7 @@ bool ServerClient::sendDeviceUpdateAndGetTime(const DeviceUpdate& update, int& h
 }
 
 bool ServerClient::parseServerResponse(const String& response, ServerResponse& serverResponse) {
-    StaticJsonDocument<200> doc;
+    StaticJsonDocument<512> doc;
     DeserializationError error = deserializeJson(doc, response);
     if (error) {
         logError(ErrorCode::JSON_PARSE_ERROR, error.c_str());
@@ -60,9 +63,28 @@ bool ServerClient::parseServerResponse(const String& response, ServerResponse& s
 }
 
 bool ServerClient::parseTimeString(const char* timeStr, int& hour, int& minute) {
+    // Validate input pointer
+    if (!timeStr) {
+        logError(ErrorCode::INVALID_TIME_FORMAT, "Time string is null");
+        return false;
+    }
+    
+    // Validate string length
+    size_t len = strlen(timeStr);
+    if (len < 5) {
+        logError(ErrorCode::INVALID_TIME_FORMAT, "Time string too short");
+        return false;
+    }
+    
     // Expected format: "HH:MM"
     if (strlen(timeStr) != 5 || timeStr[2] != ':') {
         logError(ErrorCode::INVALID_TIME_FORMAT, "Time string must be in HH:MM format");
+        return false;
+    }
+    
+    // Validate numeric characters
+    if (!isdigit(timeStr[0]) || !isdigit(timeStr[1]) || !isdigit(timeStr[3]) || !isdigit(timeStr[4])) {
+        logError(ErrorCode::INVALID_TIME_FORMAT, "Time string contains non-numeric characters");
         return false;
     }
     

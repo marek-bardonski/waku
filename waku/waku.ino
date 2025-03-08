@@ -175,6 +175,15 @@ bool initializeSystem() {
     return fullInit;
 }
 
+// Add cleanup function after object declarations
+void cleanupResources() {
+    if (alarm) { delete alarm; alarm = nullptr; }
+    if (displayManager) { delete displayManager; displayManager = nullptr; }
+    if (serverClient) { delete serverClient; serverClient = nullptr; }
+    if (co2Sensor) { delete co2Sensor; co2Sensor = nullptr; }
+    if (buttonHandler) { delete buttonHandler; buttonHandler = nullptr; }
+}
+
 void setup() {
     Wire.begin();
     Serial.begin(9600);
@@ -198,6 +207,7 @@ void setup() {
     )) {
         Serial.println("ERROR: Failed to initialize tasks");
         displayManager->displayError(static_cast<int>(ErrorCode::TASK_INIT_FAILED));
+        cleanupResources();  // Clean up before halting
         while(1); // Critical error - halt system
     }
     

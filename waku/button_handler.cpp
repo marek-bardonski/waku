@@ -11,6 +11,8 @@ volatile bool ButtonHandler::lastState = true;
 volatile unsigned long ButtonHandler::lastPressDuration = 0;
 
 void ButtonHandler::buttonISR() {
+    if (!instance) return; // Prevent null pointer dereference
+    
     unsigned long interruptTime = millis();
     bool currentState = digitalRead(instance->buttonPin);
     
